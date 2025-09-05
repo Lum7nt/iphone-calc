@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>iPhone Repair Point Calculator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif; background:#f3f4f6; }
+    .scrollable-errors { max-height: 280px; overflow-y: auto; }
+    .scrollable-errors::-webkit-scrollbar { width: 8px; }
+    .scrollable-errors::-webkit-scrollbar-track { background: #e5e7eb; border-radius: 10px; }
+    .scrollable-errors::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 10px; }
+    .scrollable-errors::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+  </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+  <div class="bg-white rounded-xl shadow-2xl p-8 max-w-2xl w-full space-y-6">
+    <h1 class="text-3xl font-bold text-gray-800 text-center">iPhone Repair Point Calculator</h1>
+    <p class="text-gray-600 text-center text-sm">Select an iPhone model, check the corresponding errors, and calculate the total points.</p>
+
+    <div id="app" class="space-y-5">
+      <div id="messageBox" class="hidden p-3 rounded text-sm"></div>
+
+      <div>
+        <label for="modelSelect" class="block text-sm font-medium text-gray-700 mb-1">iPhone Model</label>
+        <select id="modelSelect" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition">
+          <option value="" disabled selected>-- Loading models... --</option>
+        </select>
+      </div>
+
+      <div id="errorCodesSection" class="hidden">
+        <p class="block text-sm font-medium text-gray-700 mb-2">Select Error Codes</p>
+        <div id="checkboxes" class="bg-gray-50 p-4 rounded-lg border border-gray-200 scrollable-errors"></div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="bg-gray-100 p-6 rounded-lg text-center">
+          <p class="text-sm font-medium text-gray-500">Current Selection Points</p>
+          <p id="selectionPoints" class="text-3xl font-extrabold text-gray-800 mt-1">0</p>
+        </div>
+        <div class="bg-gray-100 p-6 rounded-lg text-center">
+          <p class="text-sm font-medium text-gray-500">Running Total</p>
+          <p id="totalPoints" class="text-3xl font-extrabold text-blue-600 mt-1">0</p>
+        </div>
+      </div>
+
+      <div class="pt-2 space-y-3">
+         <button id="calculateBtn" class="w-full bg-blue-600 text-white font-semibold py-3 rounded-lg shadow-lg hover:bg-blue-700 disabled:opacity-50" disabled>
+          Add Selected Points to Total
+        </button>
+        <div class="grid grid-cols-2 gap-3">
+          <button id="clearSelection" class="w-full bg-gray-100 text-gray-700 font-medium py-2.5 rounded-lg border hover:bg-gray-200">Clear Selection</button>
+          <button id="resetTotal" class="w-full bg-gray-100 text-gray-700 font-medium py-2.5 rounded-lg border hover:bg-gray-200">Reset Total</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // Paste the ID from your 'Publish to the web' link here
+    const PUBLISHED_ID = '2PACX-1vQHAfGmKNKu0cQnVg6C4Y7ihwsCwKKssVOm_Q6ApLSBk6yrVG_XxsR2f0mNg21ADQ';
+    const CACHE_KEY = 'iphonePointsTotal';
+
+    // --- CONFIGURE YOUR SHEETS HERE ---
+    // Add each of your data sheets to this list.
+    // Find the GID in your sheet's URL (e.g., ...#gid=123456789)
+    const DATA_SHEETS = [
+      { title: 'iPhone 11 Series', gid: '1277125293' },
+      { title: 'iPhone 12 Series', gid: '2006377942' },
+      { title: 'iPhone 13 Series', gid: '1867049299' },
+      { title: 'iPhone 14 Series', gid: '1880946255' },
+      { title: 'iPhone 15 Series', gid: '1136802726' },
+      // { title: 'Another Sheet', gid: 'ANOTHER_GID' },
+    ];
+    // ------------------------------------
+
+    let allRows = [];
+
+    const by = (sel) => document.querySelector(sel);
+
+    function csvUrlFromGid(gid) {
+      return `https://docs.google.com/spreadsheets/d/e/${PUBLISHED_ID}/pub?gid=${gid}&single=true&output=csv`;
+    }
+
+    function toNumber(x) {
+      if (x == null) return NaN;
+      const s = String(x).trim().replace(',', '.');
+      const n = parseFloat(s);
+      return Number.isFinite(n) ? n : NaN;
+    }
+
+    function showMessage(text, type = 'success') {
+        const box = by('#messageBox');
+        box.textContent = text;
+        box.className = 'p-3 rounded text-sm text-center font-medium'; // Reset classes
+        if (type === 'success') {
+            box.classList.add('bg-green-100', 'text-green-800');
+        } else if (type === 'error') {
+            box.classList.add('bg-red-100', 'text-red-800');
+        } else { // 'info'
+             box.classList.add('bg-blue-100', 'text-blue-800');
+        }
+        box.classList.remove('hidden');
+        setTimeout(() => box.classList.add('hidden'), 4000);
+    }
+
+    async function fetchCsvAsRows(gid) {
+      const url = csvUrlFromGid(gid);
+      try {
+          const resp = await fetch(url, { cache: 'no-store' }); 
+          if (!resp.ok) {
+              throw new Error(`Network response was not ok (${resp.status})`);
+          }
+          const text = await resp.text();
+          if (!text) {
+              console.warn(`Warning: Fetched empty data from GID ${gid}. Sheet might be empty or improperly published.`);
+              return [];
+          }
+          console.log(`Raw CSV data for GID ${gid}:\n`, text); // DEBUG LOG
+          return Papa.parse(text, { skipEmptyLines: true }).data;
+      } catch (error) {
+          console.error(`Failed to fetch or parse sheet with GID ${gid}:`, error);
+          throw new Error(`Could not load data for sheet GID ${gid}.`);
+      }
+    }
+    
+    function parseDataRows(rows, sheetTitle) {
+        if (!rows || rows.length < 1) return []; // Check for at least a header row
+        console.log(`Parsing sheet: "${sheetTitle}"`);
+        console.log('Raw header row:', rows[0]);
+        const header = rows[0].map(h => h.trim().toLowerCase());
+        console.log('Processed header:', header);
+        
+        const modelIndex = header.indexOf('iphone model');
+        const codeIndex = header.indexOf('error code');
+        const pointsIndex = header.indexOf('error points');
+
+        if(modelIndex === -1 || codeIndex === -1 || pointsIndex === -1) {
+            console.error(`Sheet "${sheetTitle}" is missing one or more required columns.`);
+            if (modelIndex === -1) console.error("- Missing 'iphone model'");
+            if (codeIndex === -1) console.error("- Missing 'error code'");
+            if (pointsIndex === -1) console.error("- Missing 'error points'");
+            console.warn(`Skipping this sheet.`);
+            return [];
+        }
+        
+        if (rows.length < 2) {
+            console.warn(`Sheet "${sheetTitle}" has headers but no data rows. Skipping.`);
+            return [];
+        }
+
+        const results = [];
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            const model = row[modelIndex]?.toString().trim();
+            const code = row[codeIndex]?.toString().trim();
+            const points = toNumber(row[pointsIndex]);
+
+            if (model && code && Number.isFinite(points)) {
+                results.push({ model, code, points });
+            }
+        }
+        return results;
+    }
+    
+    async function fetchAllConfiguredSheets() {
+        let allData = [];
+        for (const sheet of DATA_SHEETS) {
+            if (!sheet.gid || sheet.gid === 'INSERT_GID_HERE') {
+                console.warn(`Skipping sheet "${sheet.title}" because its GID is not configured.`);
+                continue;
+            }
+            const dataRows = await fetchCsvAsRows(sheet.gid);
+            allData = allData.concat(parseDataRows(dataRows, sheet.title));
+        }
+        return allData;
+    }
+
+    function populateModelDropdown(models) {
+      const modelSelect = by('#modelSelect');
+      const uniqueModels = [...new Set(models)].sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
+      modelSelect.innerHTML = '<option value="" disabled selected>-- Choose an iPhone Model --</option>';
+      uniqueModels.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        modelSelect.appendChild(opt);
+      });
+      by('#calculateBtn').disabled = false;
+    }
+
+    function populateErrorCheckboxes(rowsForModel) {
+      const box = by('#checkboxes');
+      box.innerHTML = '';
+      rowsForModel.forEach(({ code, points }) => {
+        const id = 'err-' + code.replace(/[^a-z0-9]/gi, '_');
+        const wrap = document.createElement('div');
+        wrap.className = 'flex items-center gap-2 p-2 rounded hover:bg-gray-100 transition-colors duration-150';
+        wrap.innerHTML = `
+          <input type="checkbox" id="${id}" class="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" data-points="${points}" />
+          <label for="${id}" class="text-sm font-medium text-gray-700 flex-1 cursor-pointer">${code}</label>
+          <span class="text-xs font-semibold text-blue-600 bg-blue-100 px-2 py-1 rounded-full">${points} pts</span>
+        `;
+        box.appendChild(wrap);
+      });
+    }
+
+    function recalcSelectionTotal() {
+      let sum = 0;
+      document.querySelectorAll('#checkboxes input:checked').forEach(cb => {
+        sum += toNumber(cb.dataset.points) || 0;
+      });
+      by('#selectionPoints').textContent = String(sum);
+      return sum;
+    }
+
+    function saveTotalPoints(total) {
+      const numericTotal = Math.round(total * 100) / 100;
+      localStorage.setItem(CACHE_KEY, numericTotal);
+      by('#totalPoints').textContent = numericTotal;
+    }
+    
+    function clearSelection() {
+        document.querySelectorAll('#checkboxes input:checked').forEach(cb => cb.checked = false);
+        recalcSelectionTotal();
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      saveTotalPoints(toNumber(localStorage.getItem(CACHE_KEY)) || 0);
+      const modelSelect = by('#modelSelect');
+      
+      try {
+        showMessage('Loading data from Google Sheets...', 'info');
+        console.log('Starting to fetch all configured sheets...');
+        allRows = await fetchAllConfiguredSheets();
+        console.log(`Fetch complete. Total rows processed from all sheets: ${allRows.length}`);
+        
+        if (allRows.length > 0) {
+            const models = allRows.map(r => r.model);
+            populateModelDropdown(models);
+            showMessage('Data loaded successfully!', 'success');
+        } else {
+            throw new Error('No data was found. Check the developer console (F12) for detailed logs. Common issues include incorrect sheet publishing settings or mismatched column headers.');
+        }
+      } catch (e) {
+        console.error(e);
+        modelSelect.innerHTML = '<option value="" disabled selected>-- Error loading models --</option>';
+        showMessage(`Error: ${e.message}`, 'error');
+        by('#calculateBtn').disabled = true;
+      }
+
+      modelSelect.addEventListener('change', (e) => {
+        const model = e.target.value;
+        const currentModelRows = allRows.filter(r => r.model === model);
+        populateErrorCheckboxes(currentModelRows);
+        by('#errorCodesSection').classList.remove('hidden');
+        recalcSelectionTotal();
+      });
+
+      by('#checkboxes').addEventListener('change', () => recalcSelectionTotal());
+
+      by('#calculateBtn').addEventListener('click', () => {
+        const currentTotal = toNumber(localStorage.getItem(CACHE_KEY)) || 0;
+        const pointsToAdd = recalcSelectionTotal();
+        if (pointsToAdd > 0) {
+          saveTotalPoints(currentTotal + pointsToAdd);
+          showMessage(`${pointsToAdd} points added to total.`, 'success');
+          clearSelection();
+        } else {
+          showMessage('No errors selected to add to the total.', 'info');
+        }
+      });
+
+      by('#resetTotal').addEventListener('click', () => {
+        const total = toNumber(by('#totalPoints').textContent);
+        if (total === 0) {
+            showMessage('Total is already 0.', 'info');
+            return;
+        }
+        saveTotalPoints(0);
+        showMessage('Running total has been reset.', 'success');
+      });
+      
+      by('#clearSelection').addEventListener('click', () => {
+          if (document.querySelectorAll('#checkboxes input:checked').length > 0) {
+               clearSelection();
+               showMessage('Selection cleared.', 'success');
+          }
+      });
+    });
+  </script>
+</body>
+</html>
+
